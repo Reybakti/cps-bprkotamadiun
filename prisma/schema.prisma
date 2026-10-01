@@ -1,0 +1,537 @@
+// ============================================================
+// CPS - Sistem Informasi Koperasi Karyawan BPR
+// Unified Prisma Schema (LOCKED - hanya diotorisasi Dev 1)
+// Penyedia: PostgreSQL | Generator: prisma-client (Prisma 7)
+// ============================================================
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// ------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------
+
+enum Role {
+  ROLE_SUPERADMIN
+  ROLE_PENGURUS
+  ROLE_ADMIN_SP
+  ROLE_KASIR
+  ROLE_HRD
+  ROLE_ANGGOTA
+}
+
+enum StatusKepegawaian {
+  TETAP
+  KONTRAK // PKWT
+  PROBATION
+}
+
+enum StatusAnggota {
+  AKTIF
+  NONAKTIF
+  FROZEN // clearance negatif -> pembekuan
+  RESIGN
+}
+
+enum JenisSimpanan {
+  POKOK
+  WAJIB
+  SUKARELA
+}
+
+enum TipeMutasi {
+  SETOR
+  TARIK
+  BUNGA
+  KOREKSI
+  CLEARANCE
+}
+
+enum JenisPinjaman {
+  MULTIGUNA
+  DARURAT
+  BARANG
+}
+
+enum MetodeBunga {
+  FLAT
+  EFEKTIF
+  ANUITAS
+}
+
+enum StatusApproval {
+  DRAFT
+  VERIFIKASI_ADMIN
+  REVIEW_HRD
+  APPROVED
+  REJECTED
+  DISBURSED
+  LUNAS
+}
+
+enum StatusBayar {
+  PENDING
+  PAID
+  LUNAS
+}
+
+enum TipePotongan {
+  NOMINAL
+  PERSEN
+}
+
+enum StatusVoucher {
+  AKTIF
+  NONAKTIF
+}
+
+enum SegmentasiVoucher {
+  UMUM
+  ANGGOTA
+  TETAP
+}
+
+enum MetodeBayar {
+  TUNAI
+  QRIS
+  KASBON // Potong Gaji / Payroll Kredit
+}
+
+enum StatusPenjualan {
+  LUNAS
+  BELUM_LUNAS
+  VOID
+}
+
+enum StatusSettlement {
+  PENDING
+  EXPORTED
+  SETTLED
+}
+
+enum PosisiNormal {
+  DEBIT
+  KREDIT
+}
+
+enum KlasifikasiAkun {
+  ASET
+  KEWAJIBAN
+  EKUITAS
+  PENDAPATAN
+  BEBAN
+}
+
+enum JenisJurnal {
+  SIMPANAN
+  PINJAMAN
+  PENJUALAN
+  PERSEDIAAN
+  VOUCHER
+  PAYROLL
+  PEMBUKUAN
+  SHU
+}
+
+// ------------------------------------------------------------
+// AUTENTIKASI & KEANGGOTAAN (Dev 1)
+// ------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  nama         String?
+  role         Role
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  anggota      Anggota?
+  penjualan    Penjualan[] @relation("KasirPenjualan")
+
+  @@index([role])
+}
+
+model Anggota {
+  id                    String             @id @default(uuid())
+  userId                String?            @unique
+  user                  User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  nak                   String             @unique // Nomor Anggota Koperasi: KOP-[KANTOR]-[TAHUN]-[URUT]
+  nipKaryawan           String             @unique // NIP Pegawai BPR
+  namaLengkap           String
+  divisi                String
+  kantorCabang          String
+  jabatan               String?
+  statusKepegawaian     StatusKepegawaian
+  statusAnggota         StatusAnggota      @default(AKTIF)
+  tanggalMasuk          DateTime?
+  tanggalBerakhirKontrak DateTime?          // penting utk verifikasi PKWT oleh HRD
+  rekeningPayroll       String?             // no rekening bank / payroll
+  gajiBersih            Decimal            @default(0) @db.Decimal(12, 2)
+  limitKasbonBulanan    Decimal            @default(1500000) @db.Decimal(12, 2)
+  limitKasbonToko       Decimal            @default(1500000) @db.Decimal(12, 2) // sisa limit berjalan
+  plafonPinjamanMaks    Decimal            @default(100000000) @db.Decimal(12, 2)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  simpananMutasi        SimpananMutasi[]
+  pinjaman              Pinjaman[]
+  penjualan             Penjualan[]
+  payrollDeductions     PayrollDeduction[]
+  voucherUsages         VoucherUsage[]
+  clearance             Clearance?
+
+  @@index([statusKepegawaian])
+  @@index([statusAnggota])
+  @@index([divisi, kantorCabang])
+}
+
+// ------------------------------------------------------------
+// SIMPANAN (Dev 2)
+// ------------------------------------------------------------
+
+model SimpananMutasi {
+  id            String         @id @default(uuid())
+  anggotaId     String
+  anggota       Anggota        @relation(fields: [anggotaId], references: [id], onDelete: Cascade)
+  jenisSimpanan JenisSimpanan
+  tipeMutasi    TipeMutasi
+  nominal       Decimal        @db.Decimal(12, 2)
+  saldoAkhir    Decimal        @db.Decimal(12, 2)
+  referensiTrx  String?
+  keterangan    String?
+  jurnalId      String?
+  createdAt     DateTime       @default(now())
+
+  @@index([anggotaId, jenisSimpanan])
+  @@index([createdAt])
+}
+
+// ------------------------------------------------------------
+// PINJAMAN & ANGSURAN (Dev 2)
+// ------------------------------------------------------------
+
+model Pinjaman {
+  id                String             @id @default(uuid())
+  anggotaId         String
+  anggota           Anggota            @relation(fields: [anggotaId], references: [id], onDelete: Cascade)
+  noKontrak         String             @unique
+  jenisPinjaman     JenisPinjaman
+  nominalPengajuan  Decimal            @db.Decimal(12, 2)
+  sukuBungaTahunan  Decimal            @db.Decimal(5, 2) // persen per tahun
+  metodeBunga       MetodeBunga
+  tenorBulan        Int
+  statusApproval    StatusApproval     @default(DRAFT)
+  kolektibilitas    Int                @default(1) // Kol 1 s/d 5 (Permenkop 9/2020)
+  dsrRasio          Decimal?           @db.Decimal(5, 2) // rasio DSR saat pengajuan
+  nominalDiterima   Decimal?           @db.Decimal(12, 2) // setelah biaya adm
+  biayaAdministrasi Decimal?           @db.Decimal(12, 2)
+  disetujuiOlehId   String?
+  tanggalPencairan  DateTime?
+  tanggalLunas      DateTime?
+  sumberDana        String?            // BANK / KAS
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  angsuranJadwal    PinjamanAngsuran[]
+
+  @@index([anggotaId])
+  @@index([statusApproval])
+  @@index([kolektibilitas])
+}
+
+model PinjamanAngsuran {
+  id            String      @id @default(uuid())
+  pinjamanId    String
+  pinjaman      Pinjaman    @relation(fields: [pinjamanId], references: [id], onDelete: Cascade)
+  angsuranKe    Int
+  angsuranPokok Decimal     @db.Decimal(12, 2)
+  angsuranBunga Decimal     @db.Decimal(12, 2)
+  totalAngsuran Decimal     @db.Decimal(12, 2)
+  statusBayar   StatusBayar @default(PENDING)
+  tglJatuhTempo DateTime
+  tglBayar      DateTime?
+  nominalDibayar Decimal?   @db.Decimal(12, 2)
+  keterangan    String?
+
+  @@unique([pinjamanId, angsuranKe])
+  @@index([statusBayar, tglJatuhTempo])
+}
+
+// ------------------------------------------------------------
+// INVENTORI & PRODUK (Dev 3)
+// ------------------------------------------------------------
+
+model Produk {
+  id              String            @id @default(uuid())
+  barcode         String            @unique
+  namaBarang      String
+  kategori        String
+  satuan          String            // satuan dasar (DUS, KG, PCS, L)
+  multiUom        Json?             // [{ label: "KARTON", qty: 12 }, { label: "PCS", qty: 240 }]
+  hargaBeliHpp    Decimal           @db.Decimal(12, 2)
+  hargaJualUmum   Decimal           @db.Decimal(12, 2)
+  hargaJualAnggota Decimal          @db.Decimal(12, 2)
+  stok            Decimal           @default(0) @db.Decimal(12, 2)
+  stokMinimum     Int               @default(5) // pemicu reorder point
+  status          String            @default("AKTIF")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  penjualanDetail PenjualanDetail[]
+  poDetail        PurchaseOrderDetail[]
+  opnameItem      StockOpnameItem[]
+
+  @@index([kategori])
+  @@index([namaBarang])
+}
+
+model PurchaseOrder {
+  id        String                @id @default(uuid())
+  noPO      String                @unique
+  supplier  String
+  tanggal   DateTime              @default(now())
+  status    String                @default("OPEN") // OPEN / PARTIAL / CLOSED
+  totalNilai Decimal              @default(0) @db.Decimal(12, 2)
+  jurnalId  String?
+  createdAt DateTime              @default(now())
+  details   PurchaseOrderDetail[]
+
+  @@index([status])
+}
+
+model PurchaseOrderDetail {
+  id       String         @id @default(uuid())
+  poId     String
+  po       PurchaseOrder  @relation(fields: [poId], references: [id], onDelete: Cascade)
+  produkId String
+  produk   Produk         @relation(fields: [produkId], references: [id])
+  qty      Decimal        @db.Decimal(12, 2)
+  hargaBeli Decimal       @db.Decimal(12, 2)
+  subtotal Decimal        @db.Decimal(12, 2)
+}
+
+model StockOpname {
+  id          String             @id @default(uuid())
+  tanggal     DateTime           @default(now())
+  noBeritaAcara String          @unique
+  catatan     String?
+  selisihTotal Decimal           @default(0) @db.Decimal(12, 2)
+  jurnalId    String?
+  dibuatOlehId String?
+  items       StockOpnameItem[]
+  createdAt   DateTime           @default(now())
+}
+
+model StockOpnameItem {
+  id          String   @id @default(uuid())
+  opnameId    String
+  opname      StockOpname @relation(fields: [opnameId], references: [id], onDelete: Cascade)
+  produkId    String
+  produk      Produk   @relation(fields: [produkId], references: [id])
+  stokSistem  Decimal  @db.Decimal(12, 2)
+  stokFisik   Decimal  @db.Decimal(12, 2)
+  selisih     Decimal  @db.Decimal(12, 2)
+  hargaBeliHpp Decimal @db.Decimal(12, 2)
+  nilaiSelisih Decimal @db.Decimal(12, 2)
+}
+
+// ------------------------------------------------------------
+// VOUCHER PROMO (Dev 3)
+// ------------------------------------------------------------
+
+model Voucher {
+  id             String         @id @default(uuid())
+  kodeVoucher    String         @unique
+  namaVoucher    String
+  tipePotongan   TipePotongan
+  nilaiPotongan  Decimal        @db.Decimal(12, 2)
+  maksimalPotongan Decimal?     @db.Decimal(12, 2) // proteksi plafon diskon utk PERSEN
+  minBelanja     Decimal        @default(0) @db.Decimal(12, 2)
+  kuotaTotal     Int            @default(1)
+  kuotaTerpakai  Int            @default(0)
+  kuotaPerUser   Int            @default(1)
+  berlakuMulai   DateTime
+  berlakuSampai  DateTime
+  khususAnggota  Boolean        @default(false)
+  segmentasi     SegmentasiVoucher @default(UMUM) // UMUM / ANGGOTA / TETAP
+  status         StatusVoucher  @default(AKTIF)
+  createdAt      DateTime       @default(now())
+  usages         VoucherUsage[]
+
+  @@index([status, berlakuSampai])
+}
+
+model VoucherUsage {
+  id            String     @id @default(uuid())
+  voucherId     String
+  voucher       Voucher    @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  penjualanId   String     @unique
+  penjualan     Penjualan  @relation(fields: [penjualanId], references: [id], onDelete: Cascade)
+  anggotaId     String?
+  anggota       Anggota?   @relation(fields: [anggotaId], references: [id], onDelete: SetNull)
+  nominalDiskon Decimal    @db.Decimal(12, 2)
+  usedAt        DateTime   @default(now())
+
+  @@index([anggotaId, voucherId])
+}
+
+// ------------------------------------------------------------
+// PENJUALAN / KASIR POS (Dev 3)
+// ------------------------------------------------------------
+
+model Penjualan {
+  id                 String             @id @default(uuid())
+  noInvoice          String             @unique
+  kasirId            String
+  kasir              User               @relation("KasirPenjualan", fields: [kasirId], references: [id])
+  anggotaId          String?
+  anggota            Anggota?           @relation(fields: [anggotaId], references: [id], onDelete: SetNull)
+  subtotal           Decimal            @db.Decimal(12, 2)
+  diskonVoucher      Decimal?           @db.Decimal(12, 2)
+  totalAkhir         Decimal            @db.Decimal(12, 2)
+  metodeBayar        MetodeBayar
+  statusBayar        StatusPenjualan    @default(LUNAS)
+  referensiPembayaran String?           // no referensi QRIS / kasbon
+  jurnalId           String?
+  createdAt          DateTime           @default(now())
+  details            PenjualanDetail[]
+  voucherUsage       VoucherUsage?
+
+  @@index([anggotaId, metodeBayar, statusBayar])
+  @@index([createdAt])
+  @@index([kasirId])
+}
+
+model PenjualanDetail {
+  id           String    @id @default(uuid())
+  penjualanId  String
+  penjualan    Penjualan @relation(fields: [penjualanId], references: [id], onDelete: Cascade)
+  produkId     String
+  produk       Produk    @relation(fields: [produkId], references: [id])
+  qty          Decimal   @db.Decimal(12, 2)
+  hargaSatuan  Decimal   @db.Decimal(12, 2)
+  subtotal     Decimal   @db.Decimal(12, 2)
+}
+
+// ------------------------------------------------------------
+// PAYROLL DEDUCTION (Dev 1)
+// ------------------------------------------------------------
+
+model PayrollDeduction {
+  id                   String            @id @default(uuid())
+  periodeBulan         String            // Format YYYY-MM
+  anggotaId            String
+  anggota              Anggota           @relation(fields: [anggotaId], references: [id], onDelete: Cascade)
+  nominalSimpananWajib Decimal           @default(0) @db.Decimal(12, 2)
+  nominalAngsuranPokok Decimal           @default(0) @db.Decimal(12, 2)
+  nominalAngsuranBunga Decimal           @default(0) @db.Decimal(12, 2)
+  nominalKasbonToko    Decimal           @default(0) @db.Decimal(12, 2)
+  totalPotongan        Decimal           @default(0) @db.Decimal(12, 2)
+  statusSettlement     StatusSettlement  @default(PENDING)
+  jurnalId             String?
+  createdAt            DateTime          @default(now())
+
+  @@unique([periodeBulan, anggotaId])
+  @@index([statusSettlement])
+}
+
+// ------------------------------------------------------------
+// CLEARANCE MEMBER (Dev 1)
+// ------------------------------------------------------------
+
+model Clearance {
+  id                    String    @id @default(uuid())
+  anggotaId             String    @unique
+  anggota               Anggota   @relation(fields: [anggotaId], references: [id], onDelete: Cascade)
+  tanggal               DateTime  @default(now())
+  totalSimpananPokok    Decimal   @db.Decimal(12, 2)
+  totalSimpananWajib    Decimal   @db.Decimal(12, 2)
+  totalSimpananSukarela Decimal   @db.Decimal(12, 2)
+  sisaPokokKredit       Decimal   @db.Decimal(12, 2)
+  bungaBerjalan         Decimal   @db.Decimal(12, 2)
+  kasbonToko            Decimal   @db.Decimal(12, 2)
+  saldoHakBersih        Decimal   @db.Decimal(12, 2) // positif = hak, negatif = utang
+  status                String    @default("CLEARED") // CLEARED / FROZEN / TAGIHAN
+  keterangan            String?
+  createdAt             DateTime  @default(now())
+}
+
+// ------------------------------------------------------------
+// AKUNTANSI SAK - COA, JURNAL, ENTRI (Dev 1)
+// ------------------------------------------------------------
+
+model Account {
+  id           String            @id @default(uuid())
+  kode         String            @unique // CoA 5 level, contoh: 1.1101
+  nama         String
+  klasifikasi  KlasifikasiAkun
+  posisiNormal PosisiNormal
+  active       Boolean           @default(true)
+  keterangan   String?
+  jurnalEntries JurnalEntry[]
+}
+
+model Jurnal {
+  id          String       @id @default(uuid())
+  noJurnal    String       @unique
+  tanggal     DateTime     @default(now())
+  keterangan  String
+  sumber      JenisJurnal
+  referensi   String?       // noInvoice / noKontrak / periode
+  dibuatOlehId String?
+  lines       JurnalEntry[]
+  createdAt   DateTime     @default(now())
+
+  @@index([tanggal])
+  @@index([sumber])
+}
+
+model JurnalEntry {
+  id       String  @id @default(uuid())
+  jurnalId String
+  jurnal   Jurnal  @relation(fields: [jurnalId], references: [id], onDelete: Cascade)
+  akunId   String
+  akun     Account @relation(fields: [akunId], references: [id])
+  debit    Decimal @default(0) @db.Decimal(12, 2)
+  kredit   Decimal @default(0) @db.Decimal(12, 2)
+  keterangan String?
+
+  @@index([akunId])
+}
+
+// ------------------------------------------------------------
+// AUDIT TRAIL (append-only, Dev 1)
+// ------------------------------------------------------------
+
+model AuditTrail {
+  id        String   @id @default(uuid())
+  userId    String?
+  username  String?
+  modul     String
+  aksi      String
+  detail    Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([modul, createdAt])
+}
+
+// ------------------------------------------------------------
+// PERHITUNGAN & ALOKASI SHU (Dev 1)
+// ------------------------------------------------------------
+
+model ShuCalculation {
+  id          String   @id @default(uuid())
+  tahun       Int      @unique
+  totalLaba   Decimal  @db.Decimal(12, 2) // laba tahun berjalan (PHU)
+  persentaseCadangan Decimal @default(40) @db.Decimal(5, 2)
+  persentaseAnggota   Decimal @default(40) @db.Decimal(5, 2)
+  alokasi     Json     // rincian alokasi pos + nominal
+  anggotaAlokasi Json? // rincian JMA & JUA per anggota
+  disetujuiOlehId String?
+  createdAt   DateTime @default(now())
+}

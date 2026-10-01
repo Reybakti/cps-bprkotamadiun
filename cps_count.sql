@@ -1,0 +1,12 @@
+SELECT 'User',              count(*) FROM "User"
+UNION ALL SELECT 'Anggota',          count(*) FROM "Anggota"
+UNION ALL SELECT 'Produk',           count(*) FROM "Produk"
+UNION ALL SELECT 'Voucher',          count(*) FROM "Voucher"
+UNION ALL SELECT 'SimpananMutasi',   count(*) FROM "SimpananMutasi"
+UNION ALL SELECT 'Akun(COA)',        count(*) FROM "Account"
+UNION ALL SELECT 'Jurnal',           count(*) FROM "Jurnal"
+UNION ALL SELECT 'JurnalEntry',      count(*) FROM "JurnalEntry"
+UNION ALL SELECT 'Penjualan',        count(*) FROM "Penjualan"
+UNION ALL SELECT 'PenjualanDetail',  count(*) FROM "PenjualanDetail"
+UNION ALL SELECT 'Pinjaman',         count(*) FROM "Pinjaman"
+UNION ALL SELECT 'VoucherUsage',     count(*) FROM "VoucherUsage";
